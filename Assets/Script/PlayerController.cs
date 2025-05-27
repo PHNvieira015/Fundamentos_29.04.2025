@@ -1,4 +1,7 @@
 using UnityEngine;
+using System.Collections;
+using System.Collections.Generic;
+using Unity.VisualScripting;
 
 public class PlayerController : MonoBehaviour
 {
@@ -10,20 +13,13 @@ public class PlayerController : MonoBehaviour
     private bool SwipeDown;
 
     public float XValue = 2.5f; // Default lane width if not set in Inspector
-
-    [SerializeField] private float smoothTime = 0.3f; // Tempo de suavização (menor = mais rápido)
-
+    [SerializeField] private float smoothTime = 0.3f; // Smoothing time (lower = faster)
     [SerializeField] private GameObject characterToMove; // Character to move and rotate, set in inspector
     [SerializeField] private float rotationAmount = 30f; // Maximum rotation amount
-
-    private Vector3 currentVelocity = Vector3.zero; // Velocidade atual (usada pelo SmoothDamp)
-
+    private Vector3 currentVelocity = Vector3.zero; // Current velocity (used by SmoothDamp)
     public Animator animator; // Reference to the animator component
-
-    [SerializeField] private float jumpHeight = 1.5f; //  Made positive
-
+    [SerializeField] private float jumpHeight = 1.5f; // Made positive
     [SerializeField] private float jumpDuration = 0.5f; // Made positive
-
     private bool isJumping = false;
     private bool isSliding = false;
     private float jumpStartTime;
@@ -31,12 +27,22 @@ public class PlayerController : MonoBehaviour
     private float slideStartTime;
     private GameManager GM;
 
+    [Header("Mobile Input Settings")]
+    [SerializeField] private bool useMobileInput = false;
+    [SerializeField] private float swipeThreshold = 50f;
+    private Vector2 startTouchPosition;
+    private Vector2 endTouchPosition;
+    private bool isTouching = false;
 
     void Start()
     {
-        // Initialize position to middle lane
         pos = 2;
-        GM = GameObject.FindAnyObjectByType<GameManager>();
+        GM = GameObject.FindObjectOfType<GameManager>();
+
+        if (Application.isMobilePlatform)
+        {
+            useMobileInput = true;
+        }
 
         if (characterToMove == null)
         {
@@ -50,12 +56,22 @@ public class PlayerController : MonoBehaviour
     {
         if (GM.canMoveRoad)
         {
-            InputManager();
+            if (useMobileInput)
+            {
+                MobileInputManager();
+            }
+            else
+            {
+                DesktopInputManager();
+            }
+
             Move();
+
             if (isJumping)
             {
                 UpdateJump();
             }
+
             if (isSliding)
             {
                 UpdateSliding();
@@ -63,12 +79,12 @@ public class PlayerController : MonoBehaviour
         }
     }
 
-    void InputManager()
+    void DesktopInputManager()
     {
         SwipeLeft = Input.GetKeyDown(KeyCode.A) || Input.GetKeyDown(KeyCode.LeftArrow);
         SwipeRight = Input.GetKeyDown(KeyCode.D) || Input.GetKeyDown(KeyCode.RightArrow);
         SwipeUp = Input.GetKeyDown(KeyCode.W) || Input.GetKeyDown(KeyCode.UpArrow) || Input.GetKeyDown(KeyCode.Space);
-        SwipeDown = Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.LeftControl); // Changed to GetKey
+        SwipeDown = Input.GetKey(KeyCode.S) || Input.GetKey(KeyCode.DownArrow) || Input.GetKey(KeyCode.LeftControl);
 
         if (SwipeLeft)
         {
@@ -90,10 +106,113 @@ public class PlayerController : MonoBehaviour
         Debug.Log("Current Lane: " + pos);
     }
 
+    void MobileInputManager()
+    {
+        // Reset swipe flags
+        SwipeLeft = false;
+        SwipeRight = false;
+        SwipeUp = false;
+        SwipeDown = false;
+
+        if (Input.touchCount > 0)
+        {
+            Touch touch = Input.GetTouch(0);
+
+            switch (touch.phase)
+            {
+                case TouchPhase.Began:
+                    startTouchPosition = touch.position;
+                    isTouching = true;
+                    break;
+
+                case TouchPhase.Ended:
+                    if (isTouching)
+                    {
+                        endTouchPosition = touch.position;
+                        DetectSwipe();
+                        isTouching = false;
+                    }
+                    break;
+
+                case TouchPhase.Canceled:
+                    isTouching = false;
+                    break;
+            }
+        }
+
+#if UNITY_EDITOR
+        if (useMobileInput)
+        {
+            if (Input.GetMouseButtonDown(0))
+            {
+                startTouchPosition = Input.mousePosition;
+                isTouching = true;
+            }
+            else if (Input.GetMouseButtonUp(0) && isTouching)
+            {
+                endTouchPosition = Input.mousePosition;
+                DetectSwipe();
+                isTouching = false;
+            }
+        }
+#endif
+
+        if (SwipeLeft)
+        {
+            SetValue(pos - 1);
+        }
+        else if (SwipeRight)
+        {
+            SetValue(pos + 1);
+        }
+        else if (SwipeUp)
+        {
+            Jump();
+        }
+    }
+
+    void DetectSwipe()
+    {
+        Vector2 swipeVector = endTouchPosition - startTouchPosition;
+        float swipeDistance = swipeVector.magnitude;
+
+        // Check if swipe distance meets threshold
+        if (swipeDistance < swipeThreshold)
+        {
+            return; // Too short to be a swipe
+        }
+
+        swipeVector.Normalize();
+
+        // Determine swipe direction
+        // Horizontal swipe (left/right)
+        if (Mathf.Abs(swipeVector.x) > Mathf.Abs(swipeVector.y))
+        {
+            if (swipeVector.x > 0)
+            {
+                SwipeRight = true;
+            }
+            else
+            {
+                SwipeLeft = true;
+            }
+        }
+        else
+        {
+            if (swipeVector.y > 0)
+            {
+                SwipeUp = true;
+            }
+            else
+            {
+                SwipeDown = true;
+            }
+        }
+    }
+
     void Move()
     {
         // Calculate target X position based on lane position (pos)
-        // Assuming lanes are at X positions: -XValue, 0, XValue
         if (pos == 1)
             NewXPos = -XValue;
         else if (pos == 2)
@@ -111,7 +230,6 @@ public class PlayerController : MonoBehaviour
         float xDifference = targetPos.x - currentPos.x;
 
         // Apply rotation in SAME direction as movement
-        // When moving right (positive xDifference), rotate right (positive angle)
         float rotationValue = Mathf.Clamp(xDifference * 15f, -rotationAmount, rotationAmount);
         Quaternion targetRotation;
 
@@ -152,10 +270,10 @@ public class PlayerController : MonoBehaviour
             }
             isJumping = true;
             jumpStartTime = Time.time;
-            startY = characterToMove.transform.position.y; // Store this here!
-
+            startY = characterToMove.transform.position.y;
         }
     }
+
     void UpdateJump()
     {
         float jumpProgress = (Time.time - jumpStartTime) / jumpDuration;
@@ -163,7 +281,6 @@ public class PlayerController : MonoBehaviour
         if (jumpProgress >= 1.0f)
         {
             isJumping = false;
-            // Optionally, you might want to snap the character back to startY here.
             Vector3 landedPosition = characterToMove.transform.position;
             landedPosition.y = startY;
             characterToMove.transform.position = landedPosition;
@@ -175,54 +292,44 @@ public class PlayerController : MonoBehaviour
 
         // Apply the height to the character
         Vector3 newPos = characterToMove.transform.position;
-        newPos.y = startY + normalizedHeight; // Use startY
+        newPos.y = startY + normalizedHeight;
         characterToMove.transform.position = newPos;
     }
 
-
-
     void Slide()
     {
-        if (!isSliding) // Start sliding only if not already sliding
+        if (!isSliding)
         {
             isSliding = true;
-            slideStartTime = Time.time; // Record when sliding started
-            // Trigger the slide animation
+            slideStartTime = Time.time;
             if (animator != null)
             {
                 animator.SetTrigger("Slide");
                 Debug.Log("Slide triggered!");
             }
         }
-        //removed the Input.GetKey check from here.
     }
 
     void UpdateSliding()
     {
-        if (!Input.GetKey(KeyCode.S) && !Input.GetKey(KeyCode.DownArrow) && !Input.GetKey(KeyCode.LeftControl)) // Stop sliding
+        if (!Input.GetKey(KeyCode.S) && !Input.GetKey(KeyCode.DownArrow) && !Input.GetKey(KeyCode.LeftControl))
         {
             isSliding = false;
-            //  Optionally, reset any slide-specific properties (like scale) here.
             if (animator != null)
             {
-                animator.SetBool("StopSlide",true);
+                animator.SetBool("StopSlide", true);
             }
         }
         else
         {
-            // Apply sliding movement.  For example, you might lower the character's Y position:
             Vector3 newPosition = characterToMove.transform.position;
-            newPosition.y = startY * 0.5f;  // Example: Slide to half the original height
+            newPosition.y = startY * 0.5f;
             characterToMove.transform.position = newPosition;
-            // Or you might increase the Z scale to make it appear longer:
-            //Vector3 newScale = characterToMove.transform.localScale;
-            //newScale.z = 2f; // Example: Double the Z scale
-            //characterToMove.transform.localScale = newScale;
         }
     }
+
     private void SetValue(int value)
     {
-        // Apply boundaries: can't go lower than 1 or higher than 3
         if (value < 1)
             pos = 1;
         else if (value > 3)
